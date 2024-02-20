@@ -1,10 +1,10 @@
 pub mod settings;
 
+use bevy_utils::intern::Interned;
 pub use settings::Settings;
 
-use self::iter_utils::sorted;
 use crate::dot::{font_tag, html_escape, DotGraph};
-use bevy_render::render_graph::{Edge, NodeId, RenderGraph};
+use bevy_render::render_graph::{Edge, RenderGraph, RenderLabel};
 use iter_utils::EitherOrBoth;
 use pretty_type_name::pretty_type_name_str;
 use std::collections::HashMap;
@@ -37,38 +37,37 @@ fn build_dot_graph(
     let node_mapping: HashMap<_, _> = graph
         .iter_nodes()
         .map(|node| {
-            let name = format!(
-                "{}{}",
-                graph_name.unwrap_or(""),
-                node.name.as_deref().unwrap_or(node.type_name)
-            );
-            (node.id, name)
+            let name = format!("{}{:?}", graph_name.unwrap_or(""), node.label);
+            (node.label, name)
         })
         .collect();
 
     // Convert to format fitting GraphViz node id requirements
-    let node_id = |id: &NodeId| format!("{}_{}", graph_name.unwrap_or_default(), &node_mapping[id]);
+    let node_id = |id: &Interned<dyn RenderLabel>| {
+        format!("{}_{}", graph_name.unwrap_or_default(), &node_mapping[id])
+    };
 
     let mut nodes: Vec<_> = graph.iter_nodes().collect();
-    nodes.sort_by(|a, b| {
-        a.type_name
-            .cmp(b.type_name)
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    nodes.sort_by(|a, b| a.type_name.cmp(b.type_name));
 
     let layer_style = &settings.style.layers[subgraph_nest_level % settings.style.layers.len()];
     let next_layer_style =
         &settings.style.layers[(subgraph_nest_level + 1) % settings.style.layers.len()];
 
-    for (name, subgraph) in sorted(graph.iter_sub_graphs(), |(name, _)| *name) {
-        let internal_name = format!("{}_{}", graph_name.unwrap_or_default(), name);
-        let mut sub_dot =
-            DotGraph::subgraph(&internal_name, &[("label", name), ("fontcolor", "red")])
-                .graph_attributes(&[
-                    ("style", "rounded,filled"),
-                    ("color", &next_layer_style.color_background),
-                    ("fontcolor", &next_layer_style.color_label),
-                ]);
+    for (name, subgraph) in graph.iter_sub_graphs() {
+        let internal_name = format!("{}_{name:?}", graph_name.unwrap_or_default());
+        let mut sub_dot = DotGraph::subgraph(
+            &internal_name,
+            &[
+                ("label", format!("{name:?}").as_str()),
+                ("fontcolor", "red"),
+            ],
+        )
+        .graph_attributes(&[
+            ("style", "rounded,filled"),
+            ("color", &next_layer_style.color_background),
+            ("fontcolor", &next_layer_style.color_label),
+        ]);
         build_dot_graph(
             &mut sub_dot,
             Some(&internal_name),
@@ -80,7 +79,8 @@ fn build_dot_graph(
     }
 
     for node in &nodes {
-        let name = node.name.as_deref().unwrap_or("<node>");
+        let name = format!("{:?}", node.label);
+        let name = name.as_str();
         let type_name = pretty_type_name_str(node.type_name);
 
         let inputs = node
@@ -131,7 +131,7 @@ fn build_dot_graph(
         );
 
         dot.add_node(
-            &node_id(&node.id),
+            &node_id(&node.label),
             &[
                 ("label", &label),
                 ("color", &settings.style.color_node),
@@ -175,15 +175,6 @@ fn build_dot_graph(
 }
 mod iter_utils {
     use std::iter::Fuse;
-
-    pub fn sorted<'a, T: 'a, U: Ord>(
-        iter: impl IntoIterator<Item = T>,
-        key: impl Fn(&T) -> U,
-    ) -> impl IntoIterator<Item = T> + 'a {
-        let mut vec: Vec<_> = iter.into_iter().collect();
-        vec.sort_by_key(key);
-        vec.into_iter()
-    }
 
     pub enum EitherOrBoth<A, B> {
         Both(A, B),
